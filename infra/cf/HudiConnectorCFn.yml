@@ -1,0 +1,351 @@
+Description:  This template deploys a AWS Glue job that uses Apache Hudi marketplace connector to write yellow_trip NY taxi data, for the last 3 years, into Hudi table.
+
+Parameters:
+
+  HudiConnectionName:
+    Description: The name of the AWS Glue Connection created in Glue Studio using the deep URL
+    Type: String
+
+Resources:
+
+  ExecuteLambdaFnsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: HudiConnectorExecuteLambdaFnsRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Tags:
+        -
+          Key: Project
+          Value: HudiSparkConnector
+        
+  ReqdToTriggerLambdaFns:
+    Type: AWS::IAM::ManagedPolicy
+    DependsOn:
+      - ExecuteLambdaFnsRole
+      - JobScriptAndTempS3Bucket
+      - CuratedS3Bucket
+    Properties:
+      ManagedPolicyName: HudiConnectorReqdToTriggerLambdaFns
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: Allow
+            Action:
+              - glue:DeleteTable
+            Resource: '*'
+          -
+            Effect: Allow
+            Action: 
+              - logs:*
+            Resource:
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/invoke-hudi-connector-starter-tasks
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/invoke-hudi-connector-starter-tasks:log-stream:*
+          -
+            Effect: Allow
+            Action:
+              - s3:*
+            Resource:
+              - !Join ['', ["arn:aws:s3:::", !Ref JobScriptAndTempS3Bucket]]
+              - !Join ['', ["arn:aws:s3:::", !Ref JobScriptAndTempS3Bucket, "/*"]]  
+              - !Join ['', ["arn:aws:s3:::", !Ref CuratedS3Bucket]]
+              - !Join ['', ["arn:aws:s3:::", !Ref CuratedS3Bucket, "/*"]]         
+          -
+            Effect: Allow
+            Action:
+                - s3:GetObject
+                - s3:ListBucket
+            Resource:
+                - arn:aws:s3:::aws-bigdata-blog
+                - arn:aws:s3:::aws-bigdata-blog/artifacts/hudi-spark-connector/*
+      Roles:
+        - HudiConnectorExecuteLambdaFnsRole
+
+  ExecuteGlueHudiJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: HudiConnectorExecuteGlueHudiJobRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Path: /
+      Tags:
+        -
+          Key: Project
+          Value: HudiSparkConnector
+
+  ReqdForGlueHudiJobToExecute:
+    Type: AWS::IAM::ManagedPolicy
+    DependsOn: ExecuteGlueHudiJobRole
+    Properties:
+      ManagedPolicyName: HudiConnectorReqdForGlueHudiJobToExecute
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - 
+            Effect: Allow
+            Action:
+              - glue:Batch*
+              - glue:Update*
+              - glue:Create*
+              - glue:Delete*
+              - glue:Get*
+              - glue:Reset*
+              - glue:Untag*
+              - glue:Tag*
+            Resource: '*'
+          - 
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:AssociateKmsKey
+            Resource: arn:aws:logs:*:*:/aws-glue/*
+          -
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: '*'               
+          - 
+            Effect: Allow
+            Action:
+              - ec2:DescribeVpcEndpoints
+              - ec2:DescribeRouteTables
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcAttribute
+              - ec2:CreateTags
+              - ec2:DeleteTags
+              - ec2:CreateNetworkInterface
+              - ec2:DeleteNetworkInterface
+            Resource: '*'
+          - 
+            Effect: Allow
+            Action:
+              - redshift-data:ExecuteStatement
+              - redshift:GetClusterCredentials
+              - iam:GetRole
+            Resource: '*'
+          - 
+            Effect: Allow
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+              - s3:GetBucketAcl
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource:
+              - !Join ['', ["arn:aws:s3:::", !Ref JobScriptAndTempS3Bucket]]
+              - !Join ['', ["arn:aws:s3:::", !Ref JobScriptAndTempS3Bucket, "/*"]]  
+              - !Join ['', ["arn:aws:s3:::", !Ref CuratedS3Bucket]]
+              - !Join ['', ["arn:aws:s3:::", !Ref CuratedS3Bucket, "/*"]]  
+              - arn:aws:s3:::nyc-tlc
+              - arn:aws:s3:::nyc-tlc/*
+      Roles:
+        - HudiConnectorExecuteGlueHudiJobRole
+
+  CuratedS3Bucket:
+    Type: AWS::S3::Bucket  
+    DeletionPolicy: Delete
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        -
+          Key: Project
+          Value: HudiSparkConnector
+
+  JobScriptAndTempS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete    
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256       
+      Tags:
+        -
+          Key: Project
+          Value: HudiSparkConnector
+
+  ExecuteStarterTasksLambdaFn:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - ExecuteLambdaFnsRole
+      - ReqdToTriggerLambdaFns
+    Properties:
+      Code:
+        ZipFile: |
+          from time import sleep
+          import boto3
+          import json
+          import urllib3
+          import os
+          import zipfile
+          
+          glue = boto3.client('glue')
+          s3 = boto3.resource('s3')
+          s3_client = boto3.client('s3')
+          http = urllib3.PoolManager()
+          
+          def lambda_handler(event, context):
+            print('Event: %s' % json.dumps(event))
+            response = { 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId'] }
+            resProps = event['ResourceProperties']
+            if event['RequestType'] == 'Create':
+              try:
+                r = http.request('GET', 'https://github.com/bhavintandel/aws-glue-hudi-cdc/archive/main.zip')
+                filename = os.path.join(os.getcwd(), 'repo.zip')
+                with open(filename, 'wb') as f:
+                    f.write(r.content)
+                
+                z = zipfile.ZipFile(filename)
+                for file in z.namelist():
+                    response = s3.meta.client.upload_fileobj(
+                      z.open(file),
+                      Bucket=resProps['S3Dep'],
+                      Key=i['Key']
+                    )
+
+                #for i in s3_client.list_objects_v2(Bucket='aws-bigdata-blog',Prefix='artifacts/hudi-spark-connector/')['Contents']:
+                #  src = {'Bucket': 'aws-bigdata-blog','Key': i['Key']}
+                #  s3.meta.client.copy(src, resProps['S3Dep'], i['Key'])
+                response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupDone' })
+              except Exception as e:
+                response.update({ 'Status': 'FAILED', 'Reason': str(e), 'PhysicalResourceId': 'InitSetupFailed' })
+            if event['RequestType'] == 'Delete':
+              try:
+                s3.Bucket(resProps['S3Dep']).objects.delete()
+                s3.Bucket(resProps['S3Curated']).objects.delete()
+                try:
+                  glue.delete_table(DatabaseName='default',Name='ny_yellow_trip_data')
+                except Exception as e:
+                  if e.response['Error']['Code'] == 'EntityNotFoundException':
+                    pass
+                  else:
+                    response.update({ 'Status': 'FAILED', 'Reason': str(e), 'PhysicalResourceId': 'InitSetupDeleteFailed' })
+                response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupDelete' })
+              except Exception as e:
+                response.update({ 'Status': 'FAILED', 'Reason': str(e), 'PhysicalResourceId': 'InitSetupDeleteFailed' })
+            if event['RequestType'] == 'Update':
+              response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupNothingChanged' })
+            resp = http.request('PUT', event['ResponseURL'], body = json.dumps(response), headers = {'Content-Type': 'application/json'}, retries = False)
+            print('http resp:' + resp.data.decode('utf-8'))
+            print(response)
+            return(response)
+      FunctionName: invoke-hudi-connector-starter-tasks
+      MemorySize: 128
+      Runtime: python3.6
+      Description: Lambda function that executes starter tasks such as copying the script required for the glue job to execute.
+      Handler: index.lambda_handler
+      Role: !GetAtt ExecuteLambdaFnsRole.Arn
+      Timeout: 900      
+      Tags:
+        -
+          Key: Project
+          Value: HudiSparkConnector
+
+  ExecuteStarterTasks:
+    Type: Custom::ExecuteStarterTasks
+    DependsOn:
+      - ExecuteStarterTasksLambdaFn
+      - JobScriptAndTempS3Bucket
+      - CuratedS3Bucket
+      - ExecuteLambdaFnsRole
+      - ReqdToTriggerLambdaFns
+    Properties:
+      ServiceToken: !GetAtt ExecuteStarterTasksLambdaFn.Arn
+      S3Dep: !Ref JobScriptAndTempS3Bucket
+      S3Curated: !Ref CuratedS3Bucket
+
+  HudiInitLoadJob:
+    Type: AWS::Glue::Job
+    DependsOn:
+      - JobScriptAndTempS3Bucket
+      - CuratedS3Bucket
+      - ExecuteGlueHudiJobRole
+      - ReqdForGlueHudiJobToExecute
+    Properties:
+      Description: This job creates both Hudi and Glueparquet tables
+      Command:
+        Name: glueetl
+        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/artifacts/hudi-spark-connector/HudiInitLoadNYTaxiData.py"]]
+        PythonVersion: 3
+      DefaultArguments:
+        '--enable-glue-datacatalog': ''
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-metrics': ''
+        '--TempDir': !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/temp/HudiInitLoadJob"]]
+        '--job-language': 'python'
+        '--curated_bucket': !Ref CuratedS3Bucket
+      MaxRetries: 0
+      Name: hudi-init-load-job
+      GlueVersion: 2.0
+      Role: !GetAtt ExecuteGlueHudiJobRole.Arn
+      WorkerType: Standard
+      NumberOfWorkers: 37
+      Timeout: 2880
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Connections:
+        Connections:
+          - !Ref HudiConnectionName
+      Tags:
+        Project: HudiSparkConnector
+
+  HudiUpsertJob:
+    Type: AWS::Glue::Job
+    DependsOn:
+      - JobScriptAndTempS3Bucket
+      - CuratedS3Bucket
+      - ExecuteGlueHudiJobRole
+      - ReqdForGlueHudiJobToExecute
+    Properties:
+      Description: This job creates both Hudi and Glueparquet tables
+      Command:
+        Name: glueetl
+        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/artifacts/hudi-spark-connector/HudiUpsertNYTaxiData.py"]]
+        PythonVersion: 3
+      DefaultArguments:
+        '--enable-glue-datacatalog': ''
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-metrics': ''
+        '--TempDir': !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/temp/HudiUpsertJob"]]
+        '--job-language': 'python'
+        '--curated_bucket': !Ref CuratedS3Bucket
+      MaxRetries: 0
+      Name: hudi-upsert-job
+      GlueVersion: 2.0
+      Role: !GetAtt ExecuteGlueHudiJobRole.Arn
+      WorkerType: Standard
+      NumberOfWorkers: 37
+      Timeout: 2880
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Connections:
+        Connections:
+          - !Ref HudiConnectionName
+      Tags:
+        Project: HudiSparkConnector
