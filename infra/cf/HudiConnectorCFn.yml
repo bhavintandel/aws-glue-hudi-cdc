@@ -214,19 +214,19 @@ Resources:
             print('Event: %s' % json.dumps(event))
             response = { 'StackId': event['StackId'], 'RequestId': event['RequestId'], 'LogicalResourceId': event['LogicalResourceId'] }
             resProps = event['ResourceProperties']
-            if event['RequestType'] == 'Create':
+            if event['RequestType'] in ['Create', 'Update']:
               try:
                 r = http.request('GET', 'https://github.com/bhavintandel/aws-glue-hudi-cdc/archive/main.zip')
-                filename = os.path.join(os.getcwd(), 'repo.zip')
+                filename = os.path.join('/tmp/', 'repo.zip')
                 with open(filename, 'wb') as f:
-                    f.write(r.content)
+                    f.write(r.data)
                 
                 z = zipfile.ZipFile(filename)
                 for file in z.namelist():
-                    response = s3.meta.client.upload_fileobj(
+                    upload_response = s3.meta.client.upload_fileobj(
                       z.open(file),
                       Bucket=resProps['S3Dep'],
-                      Key=i['Key']
+                      Key=file
                     )
 
                 #for i in s3_client.list_objects_v2(Bucket='aws-bigdata-blog',Prefix='artifacts/hudi-spark-connector/')['Contents']:
@@ -234,6 +234,7 @@ Resources:
                 #  s3.meta.client.copy(src, resProps['S3Dep'], i['Key'])
                 response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupDone' })
               except Exception as e:
+                print(e)
                 response.update({ 'Status': 'FAILED', 'Reason': str(e), 'PhysicalResourceId': 'InitSetupFailed' })
             if event['RequestType'] == 'Delete':
               try:
@@ -249,8 +250,8 @@ Resources:
                 response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupDelete' })
               except Exception as e:
                 response.update({ 'Status': 'FAILED', 'Reason': str(e), 'PhysicalResourceId': 'InitSetupDeleteFailed' })
-            if event['RequestType'] == 'Update':
-              response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupNothingChanged' })
+            #if event['RequestType'] == 'Update':
+            #  response.update({ 'Status': 'SUCCESS', 'PhysicalResourceId': 'InitSetupNothingChanged' })
             resp = http.request('PUT', event['ResponseURL'], body = json.dumps(response), headers = {'Content-Type': 'application/json'}, retries = False)
             print('http resp:' + resp.data.decode('utf-8'))
             print(response)
@@ -261,7 +262,7 @@ Resources:
       Description: Lambda function that executes starter tasks such as copying the script required for the glue job to execute.
       Handler: index.lambda_handler
       Role: !GetAtt ExecuteLambdaFnsRole.Arn
-      Timeout: 900      
+      Timeout: 800      
       Tags:
         -
           Key: Project
@@ -276,6 +277,7 @@ Resources:
       - ExecuteLambdaFnsRole
       - ReqdToTriggerLambdaFns
     Properties:
+      Version: 0.5
       ServiceToken: !GetAtt ExecuteStarterTasksLambdaFn.Arn
       S3Dep: !Ref JobScriptAndTempS3Bucket
       S3Curated: !Ref CuratedS3Bucket
@@ -291,7 +293,7 @@ Resources:
       Description: This job creates both Hudi and Glueparquet tables
       Command:
         Name: glueetl
-        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/artifacts/hudi-spark-connector/HudiInitLoadNYTaxiData.py"]]
+        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/aws-glue-hudi-cdc-main/glue/python/HudiInitLoadNYTaxiData.py"]]
         PythonVersion: 3
       DefaultArguments:
         '--enable-glue-datacatalog': ''
@@ -326,7 +328,7 @@ Resources:
       Description: This job creates both Hudi and Glueparquet tables
       Command:
         Name: glueetl
-        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/artifacts/hudi-spark-connector/HudiUpsertNYTaxiData.py"]]
+        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/aws-glue-hudi-cdc-main/glue/python/HudiUpsertNYTaxiData.py"]]
         PythonVersion: 3
       DefaultArguments:
         '--enable-glue-datacatalog': ''
@@ -337,6 +339,41 @@ Resources:
         '--curated_bucket': !Ref CuratedS3Bucket
       MaxRetries: 0
       Name: hudi-upsert-job
+      GlueVersion: 2.0
+      Role: !GetAtt ExecuteGlueHudiJobRole.Arn
+      WorkerType: Standard
+      NumberOfWorkers: 37
+      Timeout: 2880
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      Connections:
+        Connections:
+          - !Ref HudiConnectionName
+      Tags:
+        Project: HudiSparkConnector
+  
+  HudiDeleteJob:
+    Type: AWS::Glue::Job
+    DependsOn:
+      - JobScriptAndTempS3Bucket
+      - CuratedS3Bucket
+      - ExecuteGlueHudiJobRole
+      - ReqdForGlueHudiJobToExecute
+    Properties:
+      Description: This job deleted records in Hudi tables
+      Command:
+        Name: glueetl
+        ScriptLocation: !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/aws-glue-hudi-cdc-main/glue/python/HudiDeleteNYTaxiData.py"]]
+        PythonVersion: 3
+      DefaultArguments:
+        '--enable-glue-datacatalog': ''
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-metrics': ''
+        '--TempDir': !Join ['', ["s3://", !Ref JobScriptAndTempS3Bucket, "/temp/HudiUpsertJob"]]
+        '--job-language': 'python'
+        '--curated_bucket': !Ref CuratedS3Bucket
+      MaxRetries: 0
+      Name: hudi-delete-job
       GlueVersion: 2.0
       Role: !GetAtt ExecuteGlueHudiJobRole.Arn
       WorkerType: Standard

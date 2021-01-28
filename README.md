@@ -3,26 +3,21 @@
 Repository to deploy sample pipeline which demonstrate CDC using AWS Glue 
 
 
-## Get from github
+## Create Glue Connector for Hudi via Console
 
-```python
-import os
-import urllib3
+* Create Glue connector and connection for Hudi as described in [blog](https://aws.amazon.com/blogs/big-data/writing-to-apache-hudi-tables-using-aws-glue-connector/)
 
-http = urllib3.PoolManager()
+## Deploy the infrastructure
 
-r = http.request('GET', 'https://github.com/bhavintandel/aws-glue-hudi-cdc/archive/main.zip')
+hudi_connection_name=
 
-filename = os.path.join(os.getcwd(), 'repo.zip')
-with open(filename, 'wb') as f:
-    f.write(r.content)
-
-import zipfile
-
-zip = zipfile.ZipFile(filename)
-print (zip.namelist())
+```sh
+aws cloudformation deploy --stack-name aws-glue-with-hudi-cdc \
+   --template-file infra/cf/HudiConnectorCFn.yml \
+   --parameter-overrides HudiConnectionName=${hudi_connection_name} \
+   --capabilities CAPABILITY_NAMED_IAM
 ```
 
 ## Bibliography
 
-* https://aws.amazon.com/blogs/big-data/writing-to-apache-hudi-tables-using-aws-glue-connector/
+* [writing-to-apache-hudi-tables-using-aws-glue-connector](https://aws.amazon.com/blogs/big-data/writing-to-apache-hudi-tables-using-aws-glue-connector/)
